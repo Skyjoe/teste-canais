@@ -91,6 +91,28 @@ h1, h2 {
   font-size: 12px;
 }
 
+.channel-logo {
+  width: 40px;
+  height: 40px;
+  margin-right: 10px;
+  object-fit: contain;
+}
+
+.channel-info {
+  flex-grow: 1;
+}
+
+.channel-name {
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.channel-category {
+  font-style: italic;
+  color: #666;
+  font-size: 10px;
+}
+
 .status-indicator {
   width: 16px;
   height: 16px;
@@ -109,7 +131,7 @@ h1, h2 {
   cursor: pointer;
   text-decoration: underline;
   color: #1a73e8;
-  flex-grow: 1;
+  margin-top: 2px;
 }
 
 .url:hover {
@@ -235,6 +257,14 @@ h1, h2 {
   </div>
 
   <script>
+    function safelyExecute(fn) {
+      try {
+        fn();
+      } catch (error) {
+        console.error('An error occurred:', error);
+      }
+    }
+
     const inputArea = document.getElementById('input-area');
     const testButton = document.getElementById('test-button');
     const clearButton = document.getElementById('clear-button');
@@ -249,10 +279,18 @@ h1, h2 {
     let favorites = JSON.parse(localStorage.getItem('favorites')) || [];
     let currentPlayPromise = null;
 
+    function handleImageError(img) {
+      img.onerror = null;  // Prevents infinite loop if fallback also fails
+      img.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"%3E%3Crect width="40" height="40" fill="%23ccc"/%3E%3Ctext x="50%" y="50%" font-family="Arial" font-size="6" fill="%23fff" text-anchor="middle" dy=".3em"%3ENo Image%3C/text%3E%3C/svg%3E';
+    }
+
     testButton.addEventListener('click', () => {
-      const urls = inputArea.value.split('\n').filter(url => url.trim() !== '');
-      resultsArea.innerHTML = '';
-      urls.forEach(testM3U8);
+      safelyExecute(() => {
+        const input = inputArea.value;
+        const channels = parseM3U8(input);
+        resultsArea.innerHTML = '';
+        channels.forEach(testM3U8);
+      });
     });
 
     clearButton.addEventListener('click', () => {
@@ -278,28 +316,93 @@ h1, h2 {
 
     savePlaylistButton.addEventListener('click', savePlaylist);
 
-    function testM3U8(url) {
+    function parseM3U8(input) {
+      const lines = input.split('\n');
+      const channels = [];
+      let currentChannel = {};
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('#EXTINF:')) {
+          const match = line.match(/tvg-logo="([^"]*)".*group-title="([^"]*)",(.*)/);
+          if (match) {
+            currentChannel.logo = match[1];
+            currentChannel.category = match[2];
+            currentChannel.name = match[3].trim();
+          }
+        } else if (line.startsWith('http')) {
+          currentChannel.url = line;
+          channels.push(currentChannel);
+          currentChannel = {};
+        }
+      }
+
+      return channels;
+    }
+
+    function testM3U8(channel) {
+      if (!channel || typeof channel !== 'object') {
+        console.error('Invalid channel object:', channel);
+        return;
+      }
+
       const resultItem = document.createElement('div');
       resultItem.className = 'result-item';
+
+      const logoImg = document.createElement('img');
+      logoImg.className = 'channel-logo';
+      logoImg.src = channel.logo || 'default-logo.png';
+      logoImg.alt = `${channel.name || 'Unknown'} logo`;
+      logoImg.onerror = () => handleImageError(logoImg);
+
+      const channelInfo = document.createElement('div');
+      channelInfo.className = 'channel-info';
+
+      const channelName = document.createElement('div');
+      channelName.className = 'channel-name';
+      channelName.textContent = channel.name || 'Unknown Channel';
+
+      const channelCategory = document.createElement('div');
+      channelCategory.className = 'channel-category';
+      channelCategory.textContent = channel.category || 'Uncategorized';
+
+      const urlSpan = document.createElement('div');
+      urlSpan.className = 'url';
+      urlSpan.textContent = channel.url || 'No URL provided';
+      urlSpan.onclick = () => channel.url && playMedia(channel.url);
+
       const statusIndicator = document.createElement('div');
       statusIndicator.className = 'status-indicator';
-      const urlSpan = document.createElement('span');
-      urlSpan.className = 'url';
-      urlSpan.textContent = url;
-      urlSpan.onclick = () => playMedia(url);
+
       const signalStrength = document.createElement('span');
       signalStrength.className = 'signal-strength';
+
       const favoriteButton = document.createElement('button');
       favoriteButton.className = 'favorite-button';
       favoriteButton.textContent = 'Favorito';
-      favoriteButton.onclick = () => addToFavorites(url);
+      favoriteButton.onclick = () => addToFavorites(channel);
 
+      channelInfo.appendChild(channelName);
+      channelInfo.appendChild(channelCategory);
+      channelInfo.appendChild(urlSpan);
+
+      resultItem.appendChild(logoImg);
+      resultItem.appendChild(channelInfo);
       resultItem.appendChild(statusIndicator);
-      resultItem.appendChild(urlSpan);
       resultItem.appendChild(signalStrength);
       resultItem.appendChild(favoriteButton);
+
       resultsArea.appendChild(resultItem);
 
+      if (channel.url) {
+        testChannelSignal(channel.url, statusIndicator, signalStrength);
+      } else {
+        statusIndicator.className = 'status-indicator status-no-signal';
+        signalStrength.textContent = 'URL inválida';
+      }
+    }
+
+    function testChannelSignal(url, statusIndicator, signalStrength) {
       if (Hls.isSupported()) {
         const tempHls = new Hls();
         tempHls.loadSource(url);
@@ -361,6 +464,11 @@ h1, h2 {
     }
 
     function playMedia(url) {
+      if (!url) {
+        console.error('Invalid URL provided to playMedia');
+        return;
+      }
+
       document.querySelectorAll('.url').forEach(el => el.classList.remove('highlighted-link'));
       
       const clickedLink = Array.from(document.querySelectorAll('.url')).find(el => el.textContent === url);
@@ -407,35 +515,59 @@ h1, h2 {
       }
     }
 
-    function addToFavorites(url) {
-      if (!favorites.includes(url)) {
-        favorites.push(url);
+    function addToFavorites(channel) {
+      if (!favorites.some(fav => fav.url === channel.url)) {
+        favorites.push(channel);
         localStorage.setItem('favorites', JSON.stringify(favorites));
         updateFavoritesList();
       }
     }
 
     function removeFromFavorites(url) {
-      favorites = favorites.filter(fav => fav !== url);
+      favorites = favorites.filter(fav => fav.url !== url);
       localStorage.setItem('favorites', JSON.stringify(favorites));
       updateFavoritesList();
     }
 
     function updateFavoritesList() {
       favoritesArea.innerHTML = '';
-      favorites.forEach(url => {
+      favorites.forEach(channel => {
         const favoriteItem = document.createElement('div');
         favoriteItem.className = 'favorite-item';
-        const urlSpan = document.createElement('span');
+
+        const logoImg = document.createElement('img');
+        logoImg.className = 'channel-logo';
+        logoImg.src = channel.logo || 'default-logo.png';
+        logoImg.alt = `${channel.name} logo`;
+        logoImg.onerror = () => handleImageError(logoImg);
+
+        const channelInfo = document.createElement('div');
+        channelInfo.className = 'channel-info';
+
+        const channelName = document.createElement('div');
+        channelName.className = 'channel-name';
+        channelName.textContent = channel.name;
+
+        const channelCategory = document.createElement('div');
+        channelCategory.className = 'channel-category';
+        channelCategory.textContent = channel.category;
+
+        const urlSpan = document.createElement('div');
         urlSpan.className = 'url';
-        urlSpan.textContent = url;
-        urlSpan.onclick = () => playMedia(url);
+        urlSpan.textContent = channel.url;
+        urlSpan.onclick = () => playMedia(channel.url);
+
         const removeButton = document.createElement('button');
         removeButton.className = 'remove-favorite-button';
         removeButton.textContent = 'Remover';
-        removeButton.onclick = () => removeFromFavorites(url);
+        removeButton.onclick = () => removeFromFavorites(channel.url);
 
-        favoriteItem.appendChild(urlSpan);
+        channelInfo.appendChild(channelName);
+        channelInfo.appendChild(channelCategory);
+        channelInfo.appendChild(urlSpan);
+
+        favoriteItem.appendChild(logoImg);
+        favoriteItem.appendChild(channelInfo);
         favoriteItem.appendChild(removeButton);
         favoritesArea.appendChild(favoriteItem);
       });
@@ -472,7 +604,7 @@ h1, h2 {
     }
 
     function savePlaylist() {
-      const playlistContent = `#EXTM3U\n${favorites.map((url, index) => `#EXTINF:-1,Canal ${index + 1}\n${url}`).join('\n')}`;
+      const playlistContent = `#EXTM3U\n${favorites.map((channel, index) => `#EXTINF:-1,${channel.name}\n${channel.url}`).join('\n')}`;
       const blob = new Blob([playlistContent], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -486,6 +618,14 @@ h1, h2 {
 
     videoPlayer.addEventListener('playing', () => {
       videoPlayer.poster = '';
+    });
+
+    window.addEventListener('unhandledrejection', function(event) {
+      console.error('Unhandled rejection (promise: ', event.promise, ', reason: ', event.reason, ')');
+    });
+
+    window.addEventListener('error', function(event) {
+      console.error('Uncaught error:', event.error);
     });
 
     updateFavoritesList();
